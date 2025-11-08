@@ -133,8 +133,23 @@ def nitro_check_cert(nitro_client, objectname):
     result = False
   return result
 
+def nitro_delete(nitro_client, filename):
+  return nitro_client.request(
+    'delete',
+    endpoint='config',
+    objecttype='systemfile',
+    objectname=filename,
+    params={'args': 'filelocation:%2Fnsconfig%2Fssl'},
+  )
+
 # upload a file via nitro api
 def nitro_upload(nitro_client, source_file, target_filename):
+  # try to delete existing file first (ignore errors if file doesn't exist)
+  try:
+    nitro_delete(nitro_client, target_filename)
+  except:
+    pass
+
   return nitro_client.request(
     'post',
     endpoint='config',
@@ -147,15 +162,6 @@ def nitro_upload(nitro_client, source_file, target_filename):
         'fileencoding': 'BASE64',
       }
     }),
-  )
-
-def nitro_delete(nitro_client, filename):
-  return nitro_client.request(
-    'delete',
-    endpoint='config',
-    objecttype='systemfile',
-    objectname=filename,
-    params={'args': 'filelocation:%%2Fnsconfig%%2Fssl'},
   )
 
 # install a certificate via nitro api
@@ -272,35 +278,57 @@ nitro_client.set_verify(verify_ssl)
 nitro_client.on_error('continue')
 
 # get serial from certificates
-chain_serial = crypto.load_certificate(crypto.FILETYPE_PEM, open(chain_file).read()).get_serial_number()
+chain_cert_obj = crypto.load_certificate(crypto.FILETYPE_PEM, open(chain_file).read())
+chain_serial = chain_cert_obj.get_serial_number()
 cert_serial  = crypto.load_certificate(crypto.FILETYPE_PEM, open(cert_file).read()).get_serial_number()
 
+# extract CN from chain certificate subject
+chain_subject = chain_cert_obj.get_subject()
+chain_cn = chain_subject.CN if hasattr(chain_subject, 'CN') else 'Unknown'
+# sanitize CN for use in filename (remove spaces, special characters)
+chain_cn_safe = chain_cn.replace(' ', '-').replace('/', '-').replace('\\', '-')
+
+# construct chain certificate name based on CN
+chain_cert_name = 'letsencrypt-{}'.format(chain_cn_safe)
+print("Chain certificate CN: {}".format(chain_cn))
+print("Chain certificate name will be: {}".format(chain_cert_name))
+
 # get installed chain certkey
-check_chain = nitro_check_cert(nitro_client, args.chain)
+check_chain = nitro_check_cert(nitro_client, chain_cert_name)
 
 if check_chain:
   installed_chain_serial = int(check_chain['sslcertkey'][0]['serial'], 16)
-  print("chain certificate {} found with serial {}".format(args.chain, installed_chain_serial))
+  print("chain certificate {} found with serial {}".format(chain_cert_name, installed_chain_serial))
 
   if installed_chain_serial == chain_serial:
     print("installed chain certificate matches our serial - nothing to do")
   else:
     print("installed chain certificate serial {} does not match our serial {}".format(installed_chain_serial, chain_serial))
-    print("uploading new chain certificate as {}-{}.crt".format(args.chain, timestamp))
-    nitro_upload(nitro_client, chain_file, '{}-{}.crt'.format(args.chain, timestamp))
+    chain_file_name = 'letsencrypt-{}-{}.crt'.format(chain_cn_safe, chain_serial)
+    print("uploading new chain certificate as {}".format(chain_file_name))
+    nitro_upload(nitro_client, chain_file, chain_file_name)
     print("updating chain certificate with serial {}".format(chain_serial))
-    nitro_install_cert(nitro_client, args.chain, cert="{}-{}.crt".format(args.chain, timestamp), update=True, nodomaincheck=True)
+    nitro_install_cert(nitro_client, chain_cert_name, cert=chain_file_name, update=True, nodomaincheck=True)
 else:
-  print("chain certificate {} not found".format(args.chain))
-  print("uploading chain certificate as {}-{}.crt".format(args.chain, timestamp))
-  nitro_upload(nitro_client, chain_file, '{}-{}.crt'.format(args.chain, timestamp))
+  print("chain certificate {} not found".format(chain_cert_name))
+  chain_file_name = 'letsencrypt-{}-{}.crt'.format(chain_cn_safe, chain_serial)
+  print("uploading chain certificate as {}".format(chain_file_name))
+  nitro_upload(nitro_client, chain_file, chain_file_name)
   print("installing chain certificate with serial {}".format(chain_serial))
-  nitro_install_cert(nitro_client, args.chain, cert="{}-{}.crt".format(args.chain, timestamp))
+  nitro_install_cert(nitro_client, chain_cert_name, cert=chain_file_name)
 
 check_cert = nitro_check_cert(nitro_client, args.name)
 
+# check if certificate is linked to chain
+cert_needs_link = False
 if check_cert:
   print("certificate {} found with serial {}".format(args.name, int(check_cert['sslcertkey'][0]['serial'], 16)))
+  # check if linkcertkeyname exists and matches our chain
+  if 'linkcertkeyname' in check_cert['sslcertkey'][0] and check_cert['sslcertkey'][0]['linkcertkeyname'] == chain_cert_name:
+    print("certificate is already linked to chain certificate {}".format(chain_cert_name))
+  else:
+    print("certificate is not linked to chain certificate {}".format(chain_cert_name))
+    cert_needs_link = True
 
   if int(check_cert['sslcertkey'][0]['serial'], 16) == cert_serial:
     print("installed certificate matches our serial - nothing to do")
@@ -311,13 +339,7 @@ if check_cert:
     nitro_upload(nitro_client, privkey_file, '{}-{}.key'.format(args.name, timestamp))
     print("update certificate {}".format(args.name))
     nitro_install_cert(nitro_client, args.name, cert="{}-{}.crt".format(args.name, timestamp), key="{}-{}.key".format(args.name, timestamp), update=True, nodomaincheck=True)
-    print("link certificate {} to chain certificate {}".format(args.name, args.chain))
-    try:
-      nitro_link_cert(nitro_client, args.name, args.chain)
-    except:
-      print("certificate link was already present - nothing to do")
-    print("saving configuration")
-    nitro_save_config(nitro_client)
+    cert_needs_link = True
 else:
   print("certificate {} not found".format(args.name))
   print("uploading certificate as {}-{}.crt".format(args.name, timestamp))
@@ -326,12 +348,16 @@ else:
   nitro_upload(nitro_client, privkey_file, '{}-{}.key'.format(args.name, timestamp))
   print("installing certificate with serial {}".format(cert_serial))
   nitro_install_cert(nitro_client, args.name, cert="{}-{}.crt".format(args.name, timestamp), key="{}-{}.key".format(args.name, timestamp))
-  print("link certificate {} to chain certificate {}".format(args.name, args.chain))
+  cert_needs_link = True
+
+# link certificate to chain if needed
+if cert_needs_link:
+  print("link certificate {} to chain certificate {}".format(args.name, chain_cert_name))
   try:
-    nitro_link_cert(nitro_client, args.name, args.chain)
+    nitro_link_cert(nitro_client, args.name, chain_cert_name)
+    print("saving configuration")
+    nitro_save_config(nitro_client)
   except:
     print("certificate link was already present - nothing to do")
-  print("saving configuration")
-  nitro_save_config(nitro_client)
 
 sys.exit(0)
