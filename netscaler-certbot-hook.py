@@ -58,17 +58,67 @@ add_args = {
     'default': None,
     'required': False,
   },
+  '--ns-url': {
+    'metavar': '<url>',
+    'help': 'NetScaler URL (e.g., https://netscaler.example.com)',
+    'type': str,
+    'default': None,
+    'required': False,
+  },
+  '--ns-login': {
+    'metavar': '<string>',
+    'help': 'NetScaler login username (default: nsroot)',
+    'type': str,
+    'default': None,
+    'required': False,
+  },
+  '--ns-password': {
+    'metavar': '<string>',
+    'help': 'NetScaler login password (default: nsroot)',
+    'type': str,
+    'default': None,
+    'required': False,
+  },
+  '--ns-verify-ssl': {
+    'metavar': '<yes|no>',
+    'help': 'Verify NetScaler SSL certificate (default: no)',
+    'type': str,
+    'default': None,
+    'required': False,
+  },
+  '--dev-mode': {
+    'metavar': '',
+    'help': 'Enable development mode (uses ../cert as default cert-dir)',
+    'type': bool,
+    'default': False,
+    'required': False,
+  },
+  '--cert-dir': {
+    'metavar': '<directory>',
+    'help': 'Base directory for certificates (default: /etc/letsencrypt/live in production, ../cert in dev mode)',
+    'type': str,
+    'default': None,
+    'required': False,
+  },
 }
 
 def add_argument(parser, arg, params):
-    parser.add_argument(
-        arg,
-        metavar=params['metavar'],
-        type=params['type'],
-        help=params['help'],
-        default=params['default'],
-        required=params['required']
-    )
+    if params['type'] == bool:
+        parser.add_argument(
+            arg,
+            action='store_true',
+            help=params['help'],
+            default=params['default'],
+        )
+    else:
+        parser.add_argument(
+            arg,
+            metavar=params['metavar'],
+            type=params['type'],
+            help=params['help'],
+            default=params['default'],
+            required=params['required']
+        )
 
 # check for existence of an certificate via nitro api
 def nitro_check_cert(nitro_client, objectname):
@@ -109,7 +159,7 @@ def nitro_delete(nitro_client, filename):
   )
 
 # install a certificate via nitro api
-def nitro_install_cert(nitro_client, name, cert=None, key=None, update=False):
+def nitro_install_cert(nitro_client, name, cert=None, key=None, update=False, nodomaincheck=False):
   data = {
     'sslcertkey': {
       'certkey': name,
@@ -125,6 +175,8 @@ def nitro_install_cert(nitro_client, name, cert=None, key=None, update=False):
     data['sslcertkey']['cert'] = "/nsconfig/ssl/{}".format(cert)
   if key:
     data['sslcertkey']['key'] = "/nsconfig/ssl/{}".format(key)
+  if nodomaincheck:
+    data['sslcertkey']['nodomaincheck'] = True
 
   return nitro_client.request(
     'post',
@@ -170,27 +222,36 @@ for key in add_args:
 # parse arguments
 args = parser.parse_args()
 
-# get credentials from environment
-username   = os.getenv('NS_LOGIN', 'nsroot')
-password   = os.getenv('NS_PASSWORD', 'nsroot')
-verify_ssl = os.getenv('NS_VERIFY_SSL', 'yes').lower() in ('yes', 'true', '1')
-url        = os.getenv('NS_URL', None)
+# get credentials from command line arguments or environment (arguments take precedence)
+username   = args.ns_login if args.ns_login else os.getenv('NS_LOGIN', 'nsroot')
+password   = args.ns_password if args.ns_password else os.getenv('NS_PASSWORD', 'nsroot')
+verify_ssl_str = args.ns_verify_ssl if args.ns_verify_ssl else os.getenv('NS_VERIFY_SSL', 'no')
+verify_ssl = verify_ssl_str.lower() in ('yes', 'true', '1')
+url        = args.ns_url if args.ns_url else os.getenv('NS_URL', None)
+
+# determine certificate base directory
+if args.cert_dir:
+  cert_base_dir = args.cert_dir
+elif args.dev_mode:
+  cert_base_dir = '../cert'
+else:
+  cert_base_dir = '/etc/letsencrypt/live'
 
 # default to certbot cert
 if args.cert == None:
-  cert_file = '/etc/letsencrypt/live/{}/cert.pem'.format(args.name)
+  cert_file = '{}/{}/cert.pem'.format(cert_base_dir, args.name)
 else:
   cert_file = args.cert
 
 # default to certbot privkey
 if args.privkey == None:
-  privkey_file = '/etc/letsencrypt/live/{}/privkey.pem'.format(args.name)
+  privkey_file = '{}/{}/privkey.pem'.format(cert_base_dir, args.name)
 else:
   privkey_file = args.privkey
 
 # default to certbot chain
 if args.chain_cert == None:
-  chain_file = '/etc/letsencrypt/live/{}/chain.pem'.format(args.name)
+  chain_file = '{}/{}/chain.pem'.format(cert_base_dir, args.name)
 else:
   chain_file = args.chain_cert
 
@@ -218,13 +279,17 @@ cert_serial  = crypto.load_certificate(crypto.FILETYPE_PEM, open(cert_file).read
 check_chain = nitro_check_cert(nitro_client, args.chain)
 
 if check_chain:
-  print("chain certificate {} found with serial {}".format(args.chain, int(check_chain['sslcertkey'][0]['serial'], 16)))
+  installed_chain_serial = int(check_chain['sslcertkey'][0]['serial'], 16)
+  print("chain certificate {} found with serial {}".format(args.chain, installed_chain_serial))
 
-  # for security reasons we do not handle update of chain certificates
-#  if int(check_chain['sslcertkey'][0]['serial'], 16) == chain_serial:
-#    print("installed chain certificate matches our serial - nothing to do")
-#  else:
-#    raise Exception('serial of installed chain certificate does not match our serial')
+  if installed_chain_serial == chain_serial:
+    print("installed chain certificate matches our serial - nothing to do")
+  else:
+    print("installed chain certificate serial {} does not match our serial {}".format(installed_chain_serial, chain_serial))
+    print("uploading new chain certificate as {}-{}.crt".format(args.chain, timestamp))
+    nitro_upload(nitro_client, chain_file, '{}-{}.crt'.format(args.chain, timestamp))
+    print("updating chain certificate with serial {}".format(chain_serial))
+    nitro_install_cert(nitro_client, args.chain, cert="{}-{}.crt".format(args.chain, timestamp), update=True, nodomaincheck=True)
 else:
   print("chain certificate {} not found".format(args.chain))
   print("uploading chain certificate as {}-{}.crt".format(args.chain, timestamp))
@@ -245,7 +310,7 @@ if check_cert:
     print("uploading private key as {}-{}.key".format(args.name, timestamp))
     nitro_upload(nitro_client, privkey_file, '{}-{}.key'.format(args.name, timestamp))
     print("update certificate {}".format(args.name))
-    nitro_install_cert(nitro_client, args.name, cert="{}-{}.crt".format(args.name, timestamp), key="{}-{}.key".format(args.name, timestamp), update=True)
+    nitro_install_cert(nitro_client, args.name, cert="{}-{}.crt".format(args.name, timestamp), key="{}-{}.key".format(args.name, timestamp), update=True, nodomaincheck=True)
     print("link certificate {} to chain certificate {}".format(args.name, args.chain))
     try:
       nitro_link_cert(nitro_client, args.name, args.chain)
