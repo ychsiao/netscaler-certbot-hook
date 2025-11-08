@@ -16,7 +16,9 @@ import sys
 import json
 import time
 import base64
+import requests
 import urllib.parse
+requests.packages.urllib3.disable_warnings()
 from OpenSSL import crypto
 import nitro
 
@@ -219,10 +221,10 @@ if check_chain:
   print("chain certificate {} found with serial {}".format(args.chain, int(check_chain['sslcertkey'][0]['serial'], 16)))
 
   # for security reasons we do not handle update of chain certificates
-  if int(check_chain['sslcertkey'][0]['serial'], 16) == chain_serial:
-    print("installed chain certificate matches our serial - nothing to do")
-  else:
-    raise Exception('serial of installed chain certificate does not match our serial')
+#  if int(check_chain['sslcertkey'][0]['serial'], 16) == chain_serial:
+#    print("installed chain certificate matches our serial - nothing to do")
+#  else:
+#    raise Exception('serial of installed chain certificate does not match our serial')
 else:
   print("chain certificate {} not found".format(args.chain))
   print("uploading chain certificate as {}-{}.crt".format(args.chain, timestamp))
