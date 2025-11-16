@@ -69,9 +69,9 @@ optional arguments:
 For example using Cloudflare DNS.
 ```
 certbot --text --agree-tos --non-interactive certonly \
-  --cert-name 'lauger.de' \
-  -d 'lauger.de' \
-  -d 'www.lauger.de' \
+  --cert-name 'example.com' \
+  -d 'example.com' \
+  -d 'www.example.com' \
   -a dns-cloudflare \
   --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
   --keep-until-expiring
@@ -83,7 +83,7 @@ certbot --text --agree-tos --non-interactive certonly \
 
 ```bash
 python3 netscaler-certbot-hook.py \
-  --name lauger.de \
+  --name example.com \
   --ns-url https://192.168.10.10 \
   --ns-login nsroot \
   --ns-password nsroot
@@ -102,7 +102,7 @@ export NS_PASSWORD=nsroot
 Run script and push certificate to your NetScaler:
 
 ```bash
-python3 netscaler-certbot-hook.py --name lauger.de
+python3 netscaler-certbot-hook.py --name example.com
 ```
 
 ### Method 3: Development Mode
@@ -127,13 +127,13 @@ By default, the script assumes your certificate in `/etc/letsencrypt/live`. If y
 ```bash
 # Using --cert-dir
 python3 netscaler-certbot-hook.py \
-  --name lauger.de \
+  --name example.com \
   --cert-dir /custom/path \
   --ns-url https://192.168.10.10
 
 # Or specify individual paths
 python3 netscaler-certbot-hook.py \
-  --name lauger.de \
+  --name example.com \
   --cert /custom/path/cert.pem \
   --privkey /custom/path/privkey.pem \
   --chain-cert /custom/path/chain.pem \
@@ -145,37 +145,37 @@ python3 netscaler-certbot-hook.py \
 ### Initial Setup
 
 ```
-$ python3 netscaler-certbot-hook.py --name lauger.de --ns-url https://192.168.10.10
+$ python3 netscaler-certbot-hook.py --name example.com --ns-url https://192.168.10.10
 chain certificate letsencrypt not found
 uploading chain certificate as letsencrypt-1581896753.crt
 installing chain certificate with serial 13298795840390663119752826058995181320
-certificate lauger.de not found
-uploading certificate as lauger.de-1581896753.crt
-uploading private key as lauger.de-1581896753.key
+certificate example.com not found
+uploading certificate as example.com-1581896753.crt
+uploading private key as example.com-1581896753.key
 installing certificate with serial 409596789458967997345847308430335698529007
-link certificate lauger.de to chain certificate letsencrypt
+link certificate example.com to chain certificate letsencrypt
 saving configuration
 ```
 
 ### Update Check (No Changes)
 
 ```
-$ python3 netscaler-certbot-hook.py --name lauger.de --ns-url https://192.168.10.10
+$ python3 netscaler-certbot-hook.py --name example.com --ns-url https://192.168.10.10
 chain certificate letsencrypt found with serial 13298795840390663119752826058995181320
 installed chain certificate matches our serial - nothing to do
-certificate lauger.de found with serial 409596789458967997345847308430335698529007
+certificate example.com found with serial 409596789458967997345847308430335698529007
 installed certificate matches our serial - nothing to do
 ```
 
 ### Update Chain Certificate (Auto-detected)
 
 ```
-$ python3 netscaler-certbot-hook.py --name lauger.de --ns-url https://192.168.10.10
+$ python3 netscaler-certbot-hook.py --name example.com --ns-url https://192.168.10.10
 chain certificate letsencrypt found with serial 234397126118090224789023519560838753080
 installed chain certificate serial 234397126118090224789023519560838753080 does not match our serial 226581164312556911225609404641709439649
 uploading new chain certificate as letsencrypt-1762616314.crt
 updating chain certificate with serial 226581164312556911225609404641709439649
-certificate lauger.de found with serial 409596789458967997345847308430335698529007
+certificate example.com found with serial 409596789458967997345847308430335698529007
 installed certificate matches our serial - nothing to do
 ```
 
